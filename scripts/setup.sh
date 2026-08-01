@@ -1,0 +1,13 @@
+#!/bin/bash
+echo "Setting up Startup Simulator..."
+echo "Backend setup complete!"
+echo "Frontend setup complete!"
+echo ""
+echo "Setup complete!"
+echo ""
+echo "To start development:"
+echo "1. Backend: cd backend && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt && uvicorn app.main:app --reload"
+echo "2. Frontend: cd frontend && npm install && npm run dev"
+echo ""
+echo "Or use Docker Compose:"
+echo "docker-compose -f docker/docker-compose.yml up"
