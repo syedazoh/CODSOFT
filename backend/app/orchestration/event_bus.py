@@ -35,8 +35,12 @@ class EventBus:
     async def publish(self, event_type: str, data: Dict[str, Any], source: str = "system") -> Event:
         event = Event(event_type, data, source)
         if event_type in self.subscribers:
+            payload = {"type": event.event_type, **event.data}
             for callback in self.subscribers[event_type]:
-                await callback(event)
+                try:
+                    await callback(payload)
+                except Exception:
+                    pass
         self.event_history.append(event)
         if len(self.event_history) > self.max_history_size:
             self.event_history.pop(0)
