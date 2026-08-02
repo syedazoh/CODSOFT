@@ -1,10 +1,11 @@
 """Test Agent Implementations"""
 import pytest
+import pytest_asyncio
 from app.agents import FinanceAgent
 
 @pytest.mark.asyncio
 class TestFinanceAgent:
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def finance_agent(self):
         return FinanceAgent()
 
