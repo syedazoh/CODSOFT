@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, TypedDict
 from langgraph.graph import END, StateGraph
 
 from ..core.llm import get_groq_llm
+from ..rag import get_decision_memory_store
 from .base_agent import BaseAgent
 from .schemas import FinanceDecision
 
@@ -16,6 +17,7 @@ class FinanceGraphState(TypedDict):
     budget_pool: float
     attempt: int
     decision: Optional[FinanceDecision]
+    precedent_context: Optional[str]
 
 
 class FinanceAgent(BaseAgent):
@@ -35,18 +37,22 @@ class FinanceAgent(BaseAgent):
 
     def _build_graph(self):
         graph = StateGraph(FinanceGraphState)
+        graph.add_node("retrieve_memory", self._retrieve_memory)
         graph.add_node("call_llm", self._call_llm)
         graph.add_node("fallback_decision", self._fallback_decision)
         graph.add_node("apply_decision", self._apply_decision)
+        graph.add_node("persist_memory", self._persist_memory)
 
-        graph.set_entry_point("call_llm")
+        graph.set_entry_point("retrieve_memory")
+        graph.add_edge("retrieve_memory", "call_llm")
         graph.add_conditional_edges(
             "call_llm",
             self._route_after_llm,
             {"retry": "call_llm", "fallback": "fallback_decision", "apply": "apply_decision"},
         )
         graph.add_edge("fallback_decision", "apply_decision")
-        graph.add_edge("apply_decision", END)
+        graph.add_edge("apply_decision", "persist_memory")
+        graph.add_edge("persist_memory", END)
         return graph.compile()
 
     def _route_after_llm(self, state: FinanceGraphState) -> str:
@@ -55,6 +61,20 @@ class FinanceAgent(BaseAgent):
         if state["attempt"] < MAX_LLM_ATTEMPTS:
             return "retry"
         return "fallback"
+
+    async def _retrieve_memory(self, state: FinanceGraphState) -> FinanceGraphState:
+        event = state["event"]
+        department = event.get("department", "Unknown")
+        amount = event.get("amount", 0)
+        query_text = f"Budget request from {department} for ${amount:.2f}"
+        try:
+            # chromadb's client is synchronous; a local query is fast enough not to
+            # warrant a thread-pool hop for this scope.
+            results = get_decision_memory_store().query_similar(self.agent_id, query_text, k=1)
+        except Exception:
+            results = []
+        precedent_context = results[0]["document"] if results else None
+        return {**state, "precedent_context": precedent_context}
 
     async def _call_llm(self, state: FinanceGraphState) -> FinanceGraphState:
         event = state["event"]
@@ -73,6 +93,13 @@ class FinanceAgent(BaseAgent):
             "counter_proposal (e.g. the amount actually available) instead of a flat denial. "
             "Give a brief, concrete reasoning for your decision."
         )
+        if state.get("precedent_context"):
+            prompt += (
+                "\n\nA similar past decision is in memory:\n"
+                f"{state['precedent_context']}\n"
+                "If it is relevant, factor it into your reasoning and name it in precedent_cited."
+            )
+
         try:
             decision = await self._structured_llm.ainvoke(prompt)
         except Exception:
@@ -100,6 +127,32 @@ class FinanceAgent(BaseAgent):
         self.decision_count += 1
         return state
 
+    async def _persist_memory(self, state: FinanceGraphState) -> FinanceGraphState:
+        event = state["event"]
+        decision: FinanceDecision = state["decision"]
+        department = event.get("department", "Unknown")
+        amount = event.get("amount", 0)
+        summary_text = (
+            f"Budget request from {department} for ${amount:.2f}: "
+            f"{'approved' if decision.approved else 'denied'} "
+            f"(amount_approved=${decision.amount_approved:.2f}). Reasoning: {decision.reasoning}"
+        )
+        try:
+            get_decision_memory_store().add_decision(
+                agent_id=self.agent_id,
+                event_type="budget_request",
+                summary_text=summary_text,
+                metadata={
+                    "department": department,
+                    "amount": amount,
+                    "approved": decision.approved,
+                    "amount_approved": decision.amount_approved,
+                },
+            )
+        except Exception:
+            pass
+        return state
+
     async def process_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         event_type = event.get("type")
         if event_type == "budget_request":
@@ -114,6 +167,7 @@ class FinanceAgent(BaseAgent):
             "budget_pool": self.budget_pool,
             "attempt": 0,
             "decision": None,
+            "precedent_context": None,
         }
         final_state = await self._graph.ainvoke(initial_state)
         decision: FinanceDecision = final_state["decision"]
@@ -159,6 +213,7 @@ class FinanceAgent(BaseAgent):
             "reasoning": decision.reasoning,
             "risk_notes": decision.risk_notes,
             "counter_proposal": decision.counter_proposal,
+            "precedent_cited": decision.precedent_cited,
         }
 
     async def handle_arbitration_result(self, event: Dict[str, Any]) -> Dict[str, Any]:

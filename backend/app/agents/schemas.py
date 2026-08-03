@@ -1,5 +1,5 @@
 """Structured-output schemas for agent LLM decisions"""
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -13,6 +13,10 @@ class FinanceDecision(BaseModel):
     counter_proposal: Optional[float] = Field(
         default=None,
         description="A smaller counter-offer amount if the full request cannot be approved but a partial amount can",
+    )
+    precedent_cited: Optional[str] = Field(
+        default=None,
+        description="If a similar past decision was provided as context, name/summarize which one influenced this decision",
     )
 
 
@@ -31,3 +35,11 @@ class ArbitrationDecision(BaseModel):
     )
     final_amount: float = Field(description="The final amount to be released to the requesting department")
     rationale: str = Field(description="Brief explanation referencing both departments' stated positions")
+
+
+class RunSummary(BaseModel):
+    """CEO agent's end-of-run strategic retrospective over a simulation's decision log"""
+    headline: str = Field(description="One-sentence takeaway from this simulation run")
+    key_decisions: List[str] = Field(description="A few of the most notable decisions made during the run")
+    risks: List[str] = Field(description="Risks or concerning patterns observed in the run")
+    recommendation: str = Field(description="A concrete strategic recommendation going forward")

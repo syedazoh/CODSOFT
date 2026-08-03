@@ -4,12 +4,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .database.mongodb import close_mongo_connection, connect_to_mongo, ping_mongo
+from .api.routes import agents as agents_routes
+from .api.routes import events as events_routes
+from .api.routes import simulation as simulation_routes
+from .database.mongodb import close_mongo_connection, connect_to_mongo, get_database, ping_mongo
+from .orchestration.agent_manager import AgentManager
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
+    app.state.db = get_database()
+    app.state.agent_manager = AgentManager()
+    app.state.simulation_engine = None
+    app.state.current_run_id = None
     yield
     await close_mongo_connection()
 
@@ -28,6 +36,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(agents_routes.router)
+app.include_router(events_routes.router)
+app.include_router(simulation_routes.router)
 
 
 @app.get("/")

@@ -1,9 +1,9 @@
 """CEO Agent - arbitrates cross-department budget conflicts"""
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from ..core.llm import get_groq_llm
 from .base_agent import BaseAgent
-from .schemas import ArbitrationDecision
+from .schemas import ArbitrationDecision, RunSummary
 
 
 class CEOAgent(BaseAgent):
@@ -16,6 +16,7 @@ class CEOAgent(BaseAgent):
             description="Arbitrates cross-department conflicts and sets strategic direction",
         )
         self._structured_llm = get_groq_llm().with_structured_output(ArbitrationDecision)
+        self._summary_llm = get_groq_llm().with_structured_output(RunSummary)
 
     async def process_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         if event.get("type") == "arbitration_request":
@@ -75,6 +76,41 @@ class CEOAgent(BaseAgent):
             "final_amount": decision.final_amount,
             "rationale": decision.rationale,
         }
+
+    async def summarize_run(self, decision_log: List[Dict[str, Any]]) -> RunSummary:
+        if not decision_log:
+            return RunSummary(
+                headline="No activity occurred during this run.",
+                key_decisions=[],
+                risks=[],
+                recommendation="Run a longer simulation to generate meaningful activity.",
+            )
+
+        event_counts: Dict[str, int] = {}
+        for record in decision_log:
+            event_counts[record["event_type"]] = event_counts.get(record["event_type"], 0) + 1
+
+        recent_activity = "\n".join(
+            f"- Tick {r['tick']}: {r['event_type']} {r['data']}" for r in decision_log[-30:]
+        )
+        prompt = (
+            "You are the CEO reviewing the decision log from a business simulation run.\n"
+            f"Event counts by type: {event_counts}\n"
+            f"Recent activity (up to last 30 ticks):\n{recent_activity}\n"
+            "Write a strategic retrospective: a one-sentence headline, a few key decisions "
+            "worth highlighting, any risks or concerning patterns, and one concrete "
+            "recommendation going forward."
+        )
+
+        try:
+            return await self._summary_llm.ainvoke(prompt)
+        except Exception:
+            return RunSummary(
+                headline=f"Simulation ran {len(decision_log)} ticks across {len(event_counts)} event types.",
+                key_decisions=[f"{event_type}: {count} occurrences" for event_type, count in event_counts.items()],
+                risks=["llm_fallback: unable to generate a detailed narrative summary"],
+                recommendation="Review the full decision log manually for details.",
+            )
 
     async def get_status(self) -> Dict[str, Any]:
         return {

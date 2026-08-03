@@ -1,3 +1,4 @@
-"""RAG (Retrieval-Augmented Generation) Module"""
-# Placeholder for RAG implementations
-# To be implemented in Weeks 11-14
+"""RAG (Retrieval-Augmented Generation) Module — decision memory for agents"""
+from .store import DecisionMemoryStore, get_decision_memory_store
+
+__all__ = ["DecisionMemoryStore", "get_decision_memory_store"]
