@@ -11,6 +11,10 @@ class BaseAgent(ABC):
         self.description = description
         self.created_at = datetime.now()
         self.decision_count = 0
+        self.event_bus: Optional[Any] = None
+
+    def set_event_bus(self, event_bus: Any) -> None:
+        self.event_bus = event_bus
 
     @abstractmethod
     async def process_event(self, event: Dict[str, Any]) -> Dict[str, Any]:

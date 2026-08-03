@@ -34,6 +34,12 @@ class EventBus:
 
     async def publish(self, event_type: str, data: Dict[str, Any], source: str = "system") -> Event:
         event = Event(event_type, data, source)
+        # Recorded before callbacks run: callbacks may recursively publish further
+        # events (e.g. negotiation/arbitration chains), so appending only after they
+        # complete would record nested events ahead of the event that triggered them.
+        self.event_history.append(event)
+        if len(self.event_history) > self.max_history_size:
+            self.event_history.pop(0)
         if event_type in self.subscribers:
             payload = {"type": event.event_type, **event.data}
             for callback in self.subscribers[event_type]:
@@ -41,9 +47,6 @@ class EventBus:
                     await callback(payload)
                 except Exception:
                     pass
-        self.event_history.append(event)
-        if len(self.event_history) > self.max_history_size:
-            self.event_history.pop(0)
         return event
 
     def get_event_history(self, limit: int = 100) -> List[Dict[str, Any]]:

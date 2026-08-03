@@ -1,9 +1,24 @@
 """Marketing Agent Implementation"""
-from typing import Any, Dict
+from typing import Any, Dict, Optional, TypedDict
+
+from langgraph.graph import END, StateGraph
+
+from ..core.llm import get_groq_llm
 from .base_agent import BaseAgent
+from .schemas import MarketingDecision
+
+MAX_LLM_ATTEMPTS = 2
+
+
+class MarketingGraphState(TypedDict):
+    event: Dict[str, Any]
+    attempt: int
+    decision: Optional[MarketingDecision]
+
 
 class MarketingAgent(BaseAgent):
     """Marketing Agent for campaigns and market analysis"""
+
     def __init__(self):
         super().__init__(
             agent_id="marketing_001",
@@ -12,9 +27,129 @@ class MarketingAgent(BaseAgent):
         )
         self.customer_base = 1000
         self.brand_value = 100.0
+        self._structured_llm = get_groq_llm().with_structured_output(MarketingDecision)
+        self._graph = self._build_graph()
+
+    def _build_graph(self):
+        graph = StateGraph(MarketingGraphState)
+        graph.add_node("call_llm", self._call_llm)
+        graph.add_node("fallback_decision", self._fallback_decision)
+        graph.add_node("finalize", self._finalize)
+
+        graph.set_entry_point("call_llm")
+        graph.add_conditional_edges(
+            "call_llm",
+            self._route_after_llm,
+            {"retry": "call_llm", "fallback": "fallback_decision", "apply": "finalize"},
+        )
+        graph.add_edge("fallback_decision", "finalize")
+        graph.add_edge("finalize", END)
+        return graph.compile()
+
+    def _route_after_llm(self, state: MarketingGraphState) -> str:
+        if state.get("decision") is not None:
+            return "apply"
+        if state["attempt"] < MAX_LLM_ATTEMPTS:
+            return "retry"
+        return "fallback"
+
+    async def _call_llm(self, state: MarketingGraphState) -> MarketingGraphState:
+        event = state["event"]
+        campaign_name = event.get("campaign_name", "Untitled Campaign")
+        base_budget = event.get("requested_budget", 5000)
+        attempt = state.get("attempt", 0) + 1
+
+        prompt = (
+            "You are the Marketing Manager of a startup, planning a new campaign.\n"
+            f"Campaign: {campaign_name}\n"
+            f"Suggested starting budget: ${base_budget:.2f}\n"
+            f"Current customer base: {self.customer_base}\n"
+            f"Current brand value: {self.brand_value:.2f}\n"
+            "Decide the budget you want to request from Finance for this campaign, and "
+            "explain the expected impact on customers/brand."
+        )
+        try:
+            decision = await self._structured_llm.ainvoke(prompt)
+        except Exception:
+            decision = None
+
+        return {**state, "attempt": attempt, "decision": decision}
+
+    async def _fallback_decision(self, state: MarketingGraphState) -> MarketingGraphState:
+        event = state["event"]
+        campaign_name = event.get("campaign_name", "Untitled Campaign")
+        base_budget = event.get("requested_budget", 5000)
+        decision = MarketingDecision(
+            campaign_name=campaign_name,
+            desired_budget=base_budget,
+            reasoning="llm_fallback: deterministic rule applied",
+        )
+        return {**state, "decision": decision}
+
+    async def _finalize(self, state: MarketingGraphState) -> MarketingGraphState:
+        return state
 
     async def process_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        return {"status": "processed"}
+        event_type = event.get("type")
+        if event_type == "campaign_launch":
+            return await self.handle_campaign_launch(event)
+        if event_type == "budget_negotiation":
+            return await self.handle_budget_negotiation(event)
+        if event_type == "arbitration_result":
+            return await self.handle_arbitration_result(event)
+        return {"status": "unknown_event"}
+
+    async def handle_campaign_launch(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        initial_state: MarketingGraphState = {"event": event, "attempt": 0, "decision": None}
+        final_state = await self._graph.ainvoke(initial_state)
+        decision: MarketingDecision = final_state["decision"]
+        self.decision_count += 1
+
+        if self.event_bus is not None:
+            await self.event_bus.publish(
+                "budget_request",
+                {
+                    "amount": decision.desired_budget,
+                    "department": "Marketing",
+                    "requested_by": "marketing",
+                    "escalate_on_denial": True,
+                    "campaign_name": decision.campaign_name,
+                    "marketing_reasoning": decision.reasoning,
+                    "depth": 0,
+                },
+                source=self.agent_id,
+            )
+
+        return {
+            "status": "budget_requested",
+            "campaign_name": decision.campaign_name,
+            "desired_budget": decision.desired_budget,
+            "reasoning": decision.reasoning,
+        }
+
+    def _apply_campaign_effects(self, amount: float) -> None:
+        if amount <= 0:
+            return
+        self.customer_base += int(amount / 10)
+        self.brand_value += amount / 1000
+
+    async def handle_budget_negotiation(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        finance_decision = event.get("finance_decision", {})
+        self.decision_count += 1
+        if finance_decision.get("approved"):
+            amount = finance_decision.get("amount_approved", 0)
+            self._apply_campaign_effects(amount)
+            return {"status": "campaign_launched", "amount": amount}
+        return {"status": "awaiting_arbitration_or_denied"}
+
+    async def handle_arbitration_result(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        winner = event.get("winner")
+        final_amount = event.get("final_amount", 0) or 0
+        self.decision_count += 1
+        if winner != "finance" and final_amount > 0:
+            self._apply_campaign_effects(final_amount)
+            return {"status": "campaign_launched_via_arbitration", "amount": final_amount}
+        return {"status": "campaign_denied"}
 
     async def get_status(self) -> Dict[str, Any]:
         return {
