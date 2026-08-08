@@ -57,6 +57,11 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+backend/chroma_data/
+chroma_data/
+
+# Simulation output
+simulation_log*.json
 
 # Build
 build/

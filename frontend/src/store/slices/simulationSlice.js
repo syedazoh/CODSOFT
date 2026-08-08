@@ -8,10 +8,12 @@ export const fetchSimulationStatus = createAsyncThunk('simulation/fetchStatus', 
 
 export const startSimulation = createAsyncThunk(
   'simulation/start',
-  async ({ ticks, intervalSeconds }) => {
+  async ({ ticks, durationSeconds, minInterval, maxInterval }) => {
     const response = await apiClient.post('/api/simulation/start', {
       ticks: ticks ?? null,
-      interval_seconds: intervalSeconds ?? 1.0,
+      duration_seconds: durationSeconds ?? null,
+      min_interval: minInterval ?? 0.5,
+      max_interval: maxInterval ?? 2.0,
     })
     return response.data
   },
@@ -19,6 +21,16 @@ export const startSimulation = createAsyncThunk(
 
 export const stopSimulation = createAsyncThunk('simulation/stop', async () => {
   const response = await apiClient.post('/api/simulation/stop')
+  return response.data
+})
+
+export const pauseSimulation = createAsyncThunk('simulation/pause', async () => {
+  const response = await apiClient.post('/api/simulation/pause')
+  return response.data
+})
+
+export const resumeSimulation = createAsyncThunk('simulation/resume', async () => {
+  const response = await apiClient.post('/api/simulation/resume')
   return response.data
 })
 
@@ -31,6 +43,7 @@ const simulationSlice = createSlice({
   name: 'simulation',
   initialState: {
     isRunning: false,
+    isPaused: false,
     tickCount: 0,
     decisionLogSize: 0,
     runId: null,
@@ -46,12 +59,14 @@ const simulationSlice = createSlice({
     builder
       .addCase(fetchSimulationStatus.fulfilled, (state, action) => {
         state.isRunning = action.payload.is_running
+        state.isPaused = action.payload.is_paused
         state.tickCount = action.payload.tick_count
         state.decisionLogSize = action.payload.decision_log_size
         state.runId = action.payload.run_id
       })
       .addCase(startSimulation.fulfilled, (state, action) => {
         state.isRunning = true
+        state.isPaused = false
         state.runId = action.payload.run_id
         state.summary = null
       })
@@ -60,9 +75,16 @@ const simulationSlice = createSlice({
       })
       .addCase(stopSimulation.fulfilled, (state) => {
         state.isRunning = false
+        state.isPaused = false
       })
       .addCase(stopSimulation.rejected, (state, action) => {
         state.error = action.error.message
+      })
+      .addCase(pauseSimulation.fulfilled, (state) => {
+        state.isPaused = true
+      })
+      .addCase(resumeSimulation.fulfilled, (state) => {
+        state.isPaused = false
       })
       .addCase(fetchRunSummary.fulfilled, (state, action) => {
         state.summary = action.payload

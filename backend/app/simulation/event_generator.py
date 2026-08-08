@@ -1,6 +1,6 @@
 """Synthetic event generator for Simulation Mode"""
 import random
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 EVENT_WEIGHTS = {
     "campaign_launch": 0.35,
@@ -20,12 +20,52 @@ CAMPAIGN_NAMES = [
     "Loyalty Rewards",
 ]
 
+# Below this brand_value, campaigns get weighted up — a low-brand-value business
+# should be more likely to try to fix it.
+LOW_BRAND_VALUE_THRESHOLD = 80
+# Above this employees-per-resource-unit ratio, hiring slows and resourcing speeds
+# up — headcount is outgrowing the infrastructure to support it.
+HIGH_HEADCOUNT_RATIO_THRESHOLD = 0.01
 
-def generate_event() -> Tuple[str, Dict[str, Any]]:
-    """Pick a random event type and a randomized payload for it"""
-    event_type = random.choices(
-        list(EVENT_WEIGHTS.keys()), weights=list(EVENT_WEIGHTS.values()), k=1
-    )[0]
+
+def _apply_state_adjustments(
+    weights: Dict[str, float], agent_statuses: Dict[str, Dict[str, Any]]
+) -> Dict[str, float]:
+    adjusted = dict(weights)
+
+    marketing = agent_statuses.get("marketing", {})
+    brand_value = marketing.get("brand_value")
+    if brand_value is not None and brand_value < LOW_BRAND_VALUE_THRESHOLD:
+        adjusted["campaign_launch"] = adjusted.get("campaign_launch", 0) * 1.6
+
+    hr = agent_statuses.get("hr", {})
+    operations = agent_statuses.get("operations", {})
+    employee_count = hr.get("employee_count")
+    resource_pool = operations.get("resource_pool")
+    if employee_count is not None and resource_pool:
+        ratio = employee_count / max(resource_pool, 1)
+        if ratio > HIGH_HEADCOUNT_RATIO_THRESHOLD:
+            adjusted["recruitment_request"] = adjusted.get("recruitment_request", 0) * 0.7
+            adjusted["resource_request"] = adjusted.get("resource_request", 0) * 1.5
+
+    return adjusted
+
+
+def generate_event(
+    weights: Optional[Dict[str, float]] = None,
+    agent_statuses: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """Pick a random event type and a randomized payload for it.
+
+    `weights` overrides the default event-type mix; `agent_statuses` (as returned
+    by AgentManager.get_all_agents_status()) nudges those weights based on current
+    business state, e.g. more campaigns when brand value is sagging.
+    """
+    resolved = dict(weights) if weights else dict(EVENT_WEIGHTS)
+    if agent_statuses:
+        resolved = _apply_state_adjustments(resolved, agent_statuses)
+
+    event_type = random.choices(list(resolved.keys()), weights=list(resolved.values()), k=1)[0]
 
     if event_type == "campaign_launch":
         return event_type, {

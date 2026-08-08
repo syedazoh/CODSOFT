@@ -5,14 +5,14 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ...models.schemas import SimulationStartRequest, SimulationStatusOut
-from ...simulation.simulation_engine import SimulationEngine
+from ...models.schemas import SimulationStatusOut
+from ...simulation import SimulationConfig, SimulationEngine
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
 
 @router.post("/start")
-async def start_simulation(payload: SimulationStartRequest, request: Request):
+async def start_simulation(payload: SimulationConfig, request: Request):
     app_state = request.app.state
     existing: Optional[SimulationEngine] = getattr(app_state, "simulation_engine", None)
     if existing is not None and existing.is_running:
@@ -71,7 +71,7 @@ async def start_simulation(payload: SimulationStartRequest, request: Request):
     engine = SimulationEngine(app_state.agent_manager, on_decision=on_decision, on_complete=on_complete)
     app_state.simulation_engine = engine
     app_state.current_run_id = run_id
-    engine.start(ticks=payload.ticks, interval_seconds=payload.interval_seconds)
+    engine.start(config=payload)
 
     return {"status": "started", "run_id": run_id}
 
@@ -91,6 +91,26 @@ async def stop_simulation(request: Request):
         {"$set": {"status": "stopped", "ended_at": datetime.now(timezone.utc)}},
     )
     return {"status": "stopped", "run_id": app_state.current_run_id}
+
+
+@router.post("/pause")
+async def pause_simulation(request: Request):
+    app_state = request.app.state
+    engine: Optional[SimulationEngine] = getattr(app_state, "simulation_engine", None)
+    if engine is None or not engine.is_running:
+        raise HTTPException(status_code=409, detail="No simulation is running")
+    engine.pause()
+    return {"status": "paused"}
+
+
+@router.post("/resume")
+async def resume_simulation(request: Request):
+    app_state = request.app.state
+    engine: Optional[SimulationEngine] = getattr(app_state, "simulation_engine", None)
+    if engine is None or not engine.is_running:
+        raise HTTPException(status_code=409, detail="No simulation is running")
+    engine.resume()
+    return {"status": "resumed"}
 
 
 @router.get("/status", response_model=SimulationStatusOut)
